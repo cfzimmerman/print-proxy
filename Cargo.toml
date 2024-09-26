@@ -1,0 +1,8 @@
+[package]
+name = "print_proxy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.89"
+printpdf = { version = "0.7.0", features = ["embedded_images"] }
