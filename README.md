@@ -1,3 +1,3 @@
-WIP
+This crate is a CLI tool for generating MTG proxy decks.
 
-pdf gen to simplify printing mtg proxies
+Does the same thing as copy-pasting from manabox into google docs for an hour.
