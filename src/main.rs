@@ -1,28 +1,61 @@
 use anyhow::{anyhow, bail};
+use clap::Parser;
 use printpdf::{
     image_crate::codecs::{jpeg::JpegDecoder, png::PngDecoder},
     Image, ImageTransform, Mm, PdfDocument, PdfDocumentReference,
 };
+use reqwest::{
+    blocking,
+    header::{ACCEPT, USER_AGENT},
+    Url,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
     fs::File,
-    io::{BufReader, BufWriter, Cursor, Read},
-    path::Path,
+    io::{BufRead, BufReader, BufWriter, Cursor, Read},
+    path::{Path, PathBuf},
 };
 
-// const IMAGE_URL: &str = "https://cards.scryfall.io/normal/front/3/c/3c558349-87bc-4e0f-96c2-b075f7da97d5.jpg?1712356813";
+/// CLI tool for generating printable PDFs of MTG proxy decks.
+#[derive(clap::Parser)]
+enum Args {
+    /// MTG seems to have a de-facto txt format for transfering deck info.
+    /// This takes info in the form of a Manabox txt export and converts it
+    /// into a CSV with image URLs.
+    ///
+    /// Using this tool requires the env variable `MTG_API_KEY` for
+    /// https://docs.magicthegathering.io to retrieve image urls.
+    TxtToCsv {
+        input_txt_path: PathBuf,
+        output_csv_path: PathBuf,
+    },
+    CsvToPdf {
+        input_csv_path: PathBuf,
+        output_pdf_path: PathBuf,
+    },
+}
 
 fn main() -> anyhow::Result<()> {
-    let doc = ProxyPdf::new();
-    let images = (0..24).map_while(|_| {
-        let reader = BufReader::new(
-            File::open("./wakeen.jpg")
-                .inspect_err(|e| eprintln!("{e:?}"))
-                .ok()?,
-        );
-        Some(reader)
-    });
-    doc.gen_pdf(images)?;
-    doc.save("test_output.pdf")?;
+    let args = Args::parse();
+    match args {
+        Args::TxtToCsv {
+            input_txt_path,
+            output_csv_path,
+        } => {
+            ProxyCsv::csv_from_txt(&input_txt_path, &output_csv_path)?;
+        }
+        Args::CsvToPdf {
+            input_csv_path,
+            output_pdf_path,
+        } => {
+            let mut rows = csv::Reader::from_path(input_csv_path)?;
+            let images = ProxyCsv::iter_csv_images(&mut rows)?;
+            let doc = ProxyPdf::new();
+            doc.gen_pdf(images)?;
+            doc.save(output_pdf_path)?;
+        }
+    };
     Ok(())
 }
 
@@ -113,7 +146,7 @@ impl ProxyPdf {
         Ok(())
     }
 
-    pub fn make_image(mut image_bytes: impl Read, buf: &mut Vec<u8>) -> anyhow::Result<Image> {
+    fn make_image(mut image_bytes: impl Read, buf: &mut Vec<u8>) -> anyhow::Result<Image> {
         use image::{ImageFormat, ImageReader};
 
         buf.clear();
@@ -130,5 +163,98 @@ impl ProxyPdf {
                 bail!("unsupported image format: {format:?}");
             }
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct DeckCsvRow {
+    count: usize,
+    card_name: String,
+    image_url: String,
+}
+
+struct ProxyCsv {}
+
+impl ProxyCsv {
+    fn get_image_url_for_card_name(name: &str) -> anyhow::Result<String> {
+        let url = Url::parse(&format!(
+            "https://api.scryfall.com/cards/named?exact={name}"
+        ))?;
+
+        let client = blocking::Client::new();
+        let card_info: Value = client
+            .get(url)
+            .header(USER_AGENT, "MyCliProxyFormatter/1.0")
+            .header(ACCEPT, "*/*")
+            .send()?
+            .json()?;
+
+        let image_url = card_info
+            .get("image_uris")
+            // can also be "png"
+            .and_then(|uris| uris.get("normal"))
+            .and_then(|val| val.as_str())
+            .ok_or_else(|| anyhow!("Failed to extract image url from json output"))?;
+        Ok(image_url.to_string())
+    }
+
+    pub fn csv_from_txt(input_txt: &Path, output_csv: &Path) -> anyhow::Result<()> {
+        let mut out = csv::Writer::from_path(output_csv)?;
+        for line in BufReader::new(File::open(input_txt)?).lines() {
+            let line = line?;
+            let mut words = line.trim().splitn(2, ' ');
+            let count = words.next();
+            let name = words.next();
+
+            let Some((count, name)) = count
+                .and_then(|word| word.parse::<usize>().ok())
+                .and_then(|ct| name.map(|n| (ct, n)))
+            else {
+                println!("skipping: {line}");
+                continue;
+            };
+
+            let image_url = Self::get_image_url_for_card_name(&name).unwrap_or_else(|e| {
+                eprintln!("Image fetch failed: {e:?}");
+                String::new()
+            });
+
+            println!("adding x{count} {name} at {image_url}");
+            out.serialize(DeckCsvRow {
+                count,
+                card_name: name.to_string(),
+                image_url,
+            })?;
+        }
+        Ok(())
+    }
+
+    pub fn iter_csv_images<'a, R: Read>(
+        csv_reader: &'a mut csv::Reader<R>,
+    ) -> anyhow::Result<impl Iterator<Item = Cursor<Vec<u8>>> + 'a> {
+        let results = csv_reader
+            .deserialize()
+            .map_while(|row| {
+                let row: DeckCsvRow = row
+                    .inspect_err(|e| eprintln!("Malformed csv row: {e:?}"))
+                    .ok()?;
+                println!("{row:?}");
+                let fetched_image = blocking::get(&row.image_url)
+                    .inspect_err(|e| eprintln!("image fetch failed: {e:?}"))
+                    .ok()?;
+                if !fetched_image.status().is_success() {
+                    eprintln!("fetch failed: {:?}", fetched_image.status());
+                    return None;
+                }
+                let bytes = fetched_image
+                    .bytes()
+                    .inspect_err(|e| eprintln!("failed to fetch response bytes: {e:?}"))
+                    .ok()?
+                    .to_vec();
+
+                Some((0..row.count).map(move |_| Cursor::new(bytes.clone())))
+            })
+            .flatten();
+        Ok(results)
     }
 }
