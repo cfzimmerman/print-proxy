@@ -36,9 +36,9 @@ impl ProxyPdf {
     const PAGE_HEIGHT_MM: f32 = 279.;
     const PAGE_WIDTH_MM: f32 = 210.;
 
-    /// Dimensions of an MTG card
-    const CARD_HEIGHT_MM: f32 = 88.9;
-    const CARD_WIDTH_MM: f32 = 63.5;
+    /// Dimensions of an MTG card. Undersized by 2 mm so they fit better in a card sleeve
+    const CARD_HEIGHT_MM: f32 = 86.9;
+    const CARD_WIDTH_MM: f32 = 61.5;
 
     /// Pixel density in images
     const DPI: f32 = 300.;
@@ -56,9 +56,7 @@ impl ProxyPdf {
 
     /// Creates a new pdf. Remember to call `.save` when finished.
     pub fn new() -> Self {
-        Self {
-            pdf: PdfDocument::empty("MTG deck proxy"),
-        }
+        Self::default()
     }
 
     /// Saves the PDF to the given file path. Use a `.pdf` file ending.
@@ -125,6 +123,14 @@ impl ProxyPdf {
     }
 }
 
+impl Default for ProxyPdf {
+    fn default() -> Self {
+        Self {
+            pdf: PdfDocument::empty("MTG deck proxy"),
+        }
+    }
+}
+
 pub struct ProxyCsv {}
 
 impl ProxyCsv {
@@ -168,7 +174,7 @@ impl ProxyCsv {
                 continue;
             };
 
-            let image_url = Self::get_image_url_for_card_name(&name).unwrap_or_else(|e| {
+            let image_url = Self::get_image_url_for_card_name(name).unwrap_or_else(|e| {
                 eprintln!("Image fetch failed: {e:?}");
                 String::new()
             });
@@ -186,9 +192,9 @@ impl ProxyCsv {
     /// Iterates the rows of the CSV, yielding one image buffer per card
     /// required in the deck.
     /// This isn't very memory efficient, but we don't really need that here.
-    pub fn iter_csv_images<'a, R: Read>(
-        csv_reader: &'a mut csv::Reader<R>,
-    ) -> anyhow::Result<impl Iterator<Item = Cursor<Vec<u8>>> + 'a> {
+    pub fn iter_csv_images<R: Read>(
+        csv_reader: &mut csv::Reader<R>,
+    ) -> anyhow::Result<impl Iterator<Item = Cursor<Vec<u8>>> + '_> {
         let results = csv_reader
             .deserialize()
             .map_while(|row| {
