@@ -36,9 +36,9 @@ impl ProxyPdf {
     const PAGE_HEIGHT_MM: f32 = 279.;
     const PAGE_WIDTH_MM: f32 = 210.;
 
-    /// Dimensions of an MTG card. Undersized by 2 mm so they fit better in a card sleeve
-    const CARD_HEIGHT_MM: f32 = 86.9;
-    const CARD_WIDTH_MM: f32 = 61.5;
+    /// Dimensions of an MTG card. Undersized by 1 mm so they fit better in a card sleeve
+    const CARD_HEIGHT_MM: f32 = 87.9;
+    const CARD_WIDTH_MM: f32 = 62.5;
 
     /// Pixel density in images
     const DPI: f32 = 300.;
@@ -51,8 +51,8 @@ impl ProxyPdf {
         (Self::PAGE_WIDTH_MM - (3. * Self::CARD_WIDTH_MM) - (2. * Self::MARGIN_BETWEEN_CARDS_MM))
             / 2.;
 
-    /// How much space is between cards
-    const MARGIN_BETWEEN_CARDS_MM: f32 = 1.;
+    /// How much space is between cards (previously was nonzero, I think I like this more)
+    const MARGIN_BETWEEN_CARDS_MM: f32 = 0.;
 
     /// Creates a new pdf. Remember to call `.save` when finished.
     pub fn new() -> Self {
